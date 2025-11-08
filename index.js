@@ -1,13 +1,69 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./smart-deals-firebase-adminsdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 //middleware
 app.use(express.json());
 app.use(cors());
+
+const logger = (req, res, next) => {
+  console.log("logging info");
+  next();
+};
+
+const verifyFireBaseToken = async (req, res, next) => {
+  console.log("in the verify middleware", req.headers.authorization);
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+  const token = req.headers.authorization.split(" ")[1];
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+  try {
+    const userInfo = await admin.auth().verifyIdToken(token);
+    req.token_email = userInfo.email;
+    console.log("after token validation", userInfo);
+
+    next();
+  } catch {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+};
+
+const verifyJWTToken = (req, res, next) => {
+  console.log("in middleware", req.headers);
+  const authorization = req.headers.authorization;
+  if (!authorization) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+  const token = authorization.split(" ")[1];
+  if (!token) {
+    return res.status(401).send({ message: "Unauthorized access" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
+    if (error) {
+      return res.status(401).send({ message: "Unauthorized access" });
+    }
+    console.log("decoded", decoded);
+    req.token_email = decoded.email;
+
+    next();
+  });
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.bmwxjo0.mongodb.net/?appName=Cluster0`;
 
@@ -46,6 +102,16 @@ async function run() {
         res.send(result);
       }
     });
+
+    // jwt related APIs
+    app.post("/getToken", (req, res) => {
+      const loggedUser = req.body;
+      const token = jwt.sign(loggedUser, process.env.JWT_SECRET, {
+        expiresIn: "1hr",
+      });
+      res.send({ token: token });
+    });
+
     // Products APIs
     app.get("/products", async (req, res) => {
       //   const projectFields = { title: 1, price_min: 1, price_max: 1 };
@@ -111,35 +177,60 @@ async function run() {
       res.send(result);
     });
 
-    // bids related APIs
-    app.get("/bids", async (req, res) => {
+    app.get("/bids", verifyJWTToken, async (req, res) => {
       const email = req.query.email;
       const query = {};
       if (email) {
         query.buyer_email = email;
       }
-      const cursor = bidsCollection.find(query);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
-
-    app.get("/products/bids/:productId", async (req, res) => {
-      const productId = req.params.productId;
-      const query = { product: productId };
-      const cursor = bidsCollection.find(query).sort({ bid_price: -1 });
-      const result = await cursor.toArray();
-      res.send(result);
-    });
-
-    app.get("/bids", async (req, res) => {
-      const query = {};
-      if (query.email) {
-        query.buyer_email = email;
+      // verify user have access to see this data
+      if (email !== req.token_email) {
+        return res.status(403).send({ message: "Forbidden access" });
       }
+
       const cursor = bidsCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
     });
+
+    // bids related APIs with firebase token verify
+    // app.get("/bids", logger, verifyFireBaseToken, async (req, res) => {
+    //   console.log("headers", req);
+
+    //   const email = req.query.email;
+    //   const query = {};
+    //   if (email) {
+    //     if (email !== req.token_email) {
+    //       return res.status(403).send({ message: "Forbidden access" });
+    //     }
+    //     query.buyer_email = email;
+    //   }
+    //   const cursor = bidsCollection.find(query);
+    //   const result = await cursor.toArray();
+    //   res.send(result);
+    // });
+
+    app.get(
+      "/products/bids/:productId",
+      verifyFireBaseToken,
+      async (req, res) => {
+        const productId = req.params.productId;
+        const query = { product: productId };
+        const cursor = bidsCollection.find(query).sort({ bid_price: -1 });
+        const result = await cursor.toArray();
+        res.send(result);
+      }
+    );
+
+    // app.get("/bids", async (req, res) => {
+    //   const query = {};
+    //   if (query.email) {
+    //     query.buyer_email = email;
+    //   }
+    //   const cursor = bidsCollection.find(query);
+    //   const result = await cursor.toArray();
+    //   res.send(result);
+    // });
 
     app.post("/bids", async (req, res) => {
       const newBid = req.body;
