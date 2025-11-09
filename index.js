@@ -24,21 +24,17 @@ const logger = (req, res, next) => {
 };
 
 const verifyFireBaseToken = async (req, res, next) => {
-  console.log("in the verify middleware", req.headers.authorization);
-  if (!req.headers.authorization) {
+  const authorization = req.headers.authorization;
+  if (!authorization) {
     return res.status(401).send({ message: "Unauthorized access" });
   }
-  const token = req.headers.authorization.split(" ")[1];
-  if (!token) {
-    return res.status(401).send({ message: "Unauthorized access" });
-  }
+  const token = authorization.split(" ")[1];
   try {
-    const userInfo = await admin.auth().verifyIdToken(token);
-    req.token_email = userInfo.email;
-    console.log("after token validation", userInfo);
-
+    const decoded = await admin.auth().verifyIdToken(token);
+    console.log("inside token", decoded);
+    req.token_email = decoded.email;
     next();
-  } catch {
+  } catch (error) {
     return res.status(401).send({ message: "Unauthorized access" });
   }
 };
@@ -149,7 +145,9 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/products", async (req, res) => {
+    app.post("/products", verifyFireBaseToken, async (req, res) => {
+      console.log("headers in POST", req.headers);
+
       const newProduct = req.body;
       const result = await productsCollection.insertOne(newProduct);
       res.send(result);
@@ -177,7 +175,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/bids", verifyJWTToken, async (req, res) => {
+    app.get("/bids", verifyFireBaseToken, async (req, res) => {
       const email = req.query.email;
       const query = {};
       if (email) {
@@ -212,7 +210,7 @@ async function run() {
 
     app.get(
       "/products/bids/:productId",
-      verifyFireBaseToken,
+
       async (req, res) => {
         const productId = req.params.productId;
         const query = { product: productId };
